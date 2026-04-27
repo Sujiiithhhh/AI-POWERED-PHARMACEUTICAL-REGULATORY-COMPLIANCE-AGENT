@@ -1,0 +1,4 @@
+frontend-react/node_modules/ 
+frontend-react/dist/ 
+pharmacheck.db 
+*.db 
