@@ -1,0 +1,88 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# PharmaCheck — Full Requirements (Phase 5)
+# Install: pip install -r requirements.txt
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Phase 1–3: Core compliance engine ────────────────────────────────────────
+# PDF & text
+pypdf>=4.0.0
+pdfplumber>=0.11.0
+
+# Text processing
+regex>=2024.0.0
+
+# Vector store & embeddings
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+protobuf>=4.25,<5
+
+# Notebooks & data
+jupyter>=1.0.0
+ipykernel>=6.0.0
+pandas>=2.0.0
+
+# Config
+pyyaml>=6.0.0
+
+# Phase 2 — Compliance reasoning
+openai>=1.0.0
+pytest>=7.0.0
+python-dotenv>=1.0.0
+
+# ── Phase 4: FastAPI SaaS backend ─────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9        # file uploads
+
+# Auth
+python-jose[cryptography]>=3.3.0   # JWT RS256
+passlib[bcrypt]>=1.7.4             # password hashing
+
+# Async DB
+sqlalchemy[asyncio]>=2.0.0
+aiosqlite>=0.19.0                  # SQLite async driver (dev)
+asyncpg>=0.29.0                    # PostgreSQL async driver (prod)
+
+# Rate limiting
+slowapi>=0.1.9
+
+# Migrations
+alembic>=1.13.0
+
+# Validation
+pydantic[email]>=2.0.0
+
+# 2FA
+pyotp>=2.9.0
+qrcode[pil]>=7.4.2
+
+# ── Phase 5: Async tasks, ML, Storage, Observability ─────────────────────────
+
+# Async task queue
+celery[redis]>=5.4.0
+redis>=5.0.0
+
+# ML risk scorer
+scikit-learn>=1.4.0
+numpy>=1.26.0
+
+# S3 / MinIO
+boto3>=1.34.0
+
+# HTTP client (alert polling, webhooks)
+httpx>=0.27.0
+
+# Antivirus (optional — requires ClamAV daemon)
+# pyclamd>=0.4.0
+
+# Prometheus metrics
+prometheus-fastapi-instrumentator>=7.0.0
+prometheus-client>=0.20.0
+
+# OpenTelemetry (gracefully skipped if not installed)
+opentelemetry-sdk>=1.24.0
+opentelemetry-api>=1.24.0
+opentelemetry-instrumentation-fastapi>=0.45b0
+opentelemetry-instrumentation-sqlalchemy>=0.45b0
+opentelemetry-instrumentation-httpx>=0.45b0
+opentelemetry-exporter-otlp-proto-grpc>=1.24.0

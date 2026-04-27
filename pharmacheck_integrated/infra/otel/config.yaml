@@ -1,0 +1,64 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# OpenTelemetry Collector Configuration — PharmaCheck (Phase 5)
+# Receives traces from the API and exports to Jaeger / Zipkin / Grafana Tempo
+# ══════════════════════════════════════════════════════════════════════════════
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 512
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 128
+  # Add service name attribute
+  attributes:
+    actions:
+      - key: environment
+        value: production
+        action: upsert
+
+exporters:
+  # Console output (dev/debug)
+  debug:
+    verbosity: basic
+
+  # Prometheus metrics (self-monitoring)
+  prometheus:
+    endpoint: "0.0.0.0:8888"
+    namespace: otel
+
+  # Jaeger (uncomment when Jaeger is in docker-compose)
+  # jaeger:
+  #   endpoint: jaeger:14250
+  #   tls:
+  #     insecure: true
+
+  # Grafana Tempo (uncomment when Tempo is configured)
+  # otlp/tempo:
+  #   endpoint: tempo:4317
+  #   tls:
+  #     insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, attributes]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

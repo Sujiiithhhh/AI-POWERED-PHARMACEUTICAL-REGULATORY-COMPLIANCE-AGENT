@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: PharmaCheck
+    orgId: 1
+    folder: PharmaCheck
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/provisioning/dashboards

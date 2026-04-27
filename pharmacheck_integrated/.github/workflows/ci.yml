@@ -1,0 +1,259 @@
+name: PharmaCheck CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly security scan on Sunday at 02:00 UTC
+    - cron: "0 2 * * 0"
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION:   "20"
+  REGISTRY:       ghcr.io
+  IMAGE_NAME:     ${{ github.repository }}
+
+jobs:
+  # ── 1. Secrets scan (gitleaks) ─────────────────────────────────────────────
+  secrets-scan:
+    name: Secrets Scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 2. Python linting & tests ──────────────────────────────────────────────
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    needs: secrets-scan
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB:       pharmacheck_test
+          POSTGRES_USER:     pharma_user
+          POSTGRES_PASSWORD: test_password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Lint with ruff
+        run: |
+          pip install ruff
+          ruff check backend/ src/ --ignore E501,E402
+
+      - name: Type check with mypy (backend only)
+        run: |
+          pip install mypy
+          mypy backend/ --ignore-missing-imports --no-strict-optional || true
+
+      - name: Run tests
+        env:
+          DATABASE_URL:     postgresql+asyncpg://pharma_user:test_password@localhost:5432/pharmacheck_test
+          REDIS_URL:        redis://localhost:6379/0
+          COMPLIANCE_USE_LLM: "0"
+          JWT_PRIVATE_KEY:  ${{ secrets.JWT_PRIVATE_KEY_TEST }}
+          JWT_PUBLIC_KEY:   ${{ secrets.JWT_PUBLIC_KEY_TEST }}
+        run: |
+          pytest tests/ -v --cov=backend --cov=src --cov-report=xml --tb=short
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+          fail_ci_if_error: false
+
+  # ── 3. Frontend tests + build ──────────────────────────────────────────────
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    needs: secrets-scan
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend-react/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend-react
+        run: npm ci
+
+      - name: Type check
+        working-directory: frontend-react
+        run: npx tsc --noEmit
+
+      - name: Build
+        working-directory: frontend-react
+        env:
+          VITE_API_URL: https://api.pharmacheck.io
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-react/dist/
+          retention-days: 1
+
+  # ── 4. Docker image build ─────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [python-tests, frontend-build]
+    if: github.event_name != 'pull_request'
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-react/dist/
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── 5. OWASP ZAP API security scan ────────────────────────────────────────
+  owasp-zap:
+    name: OWASP ZAP API Scan
+    runs-on: ubuntu-latest
+    needs: python-tests
+    if: github.ref == 'refs/heads/main' || github.event_name == 'schedule'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start test backend
+        run: |
+          pip install fastapi uvicorn[standard] python-jose passlib[bcrypt] sqlalchemy aiosqlite slowapi pydantic[email] pyotp qrcode[pil]
+          COMPLIANCE_USE_LLM=0 uvicorn backend.main:app --host 0.0.0.0 --port 8000 &
+          sleep 10
+          curl -f http://localhost:8000/health || exit 1
+
+      - name: OWASP ZAP API Scan
+        uses: zaproxy/action-api-scan@v0.7.0
+        with:
+          target: "http://localhost:8000/api/openapi.json"
+          format: openapi
+          fail_action: false
+          cmd_options: "-z '-config scanner.maxRuleDurationInMins=5'"
+
+      - name: Upload ZAP report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-report
+          path: report_xml.xml
+
+  # ── 6. Dependency vulnerability scan ──────────────────────────────────────
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --ignore-vuln GHSA-wfm5-g5h6-cjmq || true
+
+      - name: Run npm audit
+        working-directory: frontend-react
+        run: |
+          npm ci
+          npm audit --audit-level=high || true
+
+  # ── 7. Deploy to staging (main branch only) ───────────────────────────────
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key:      ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/pharmacheck
+            docker compose pull api
+            docker compose up -d api celery-worker celery-beat
+            docker compose exec -T api alembic upgrade head
+            echo "Deployment complete: $(date)"

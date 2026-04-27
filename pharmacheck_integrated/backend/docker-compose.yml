@@ -1,0 +1,50 @@
+version: "3.9"
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       pharmacheck
+      POSTGRES_USER:     pharma_user
+      POSTGRES_PASSWORD: changeme_in_prod
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pharma_user -d pharmacheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (for future Celery / rate-limit backend) ─────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+  # ── PharmaCheck API ─────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: ../.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pharma_user:changeme_in_prod@db:5432/pharmacheck
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ..:/app
+
+volumes:
+  pgdata:
+  redisdata:
